@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <title>Sample Rate Demo</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/lamejs/1.2.0/lame.min.js"></script>
 <style>
   :root {
     --bg: #fafafa;
@@ -27,7 +28,6 @@
     font-size: 14px;
     padding: 8px 12px;
     border: 1px solid var(--line);
-    border-radius: 6px;
     background: #fff;
     color: var(--text);
   }
@@ -55,6 +55,7 @@
 <div class="field">
   <button id="recordBtn">Record</button>
   <button id="playBtn" disabled>Play</button>
+  <button id="exportBtn" disabled>Export MP3</button>
 </div>
 
 <div class="field">
@@ -71,6 +72,7 @@ let mediaRecorder, chunks = [], recordedBuffer = null, stream = null;
 const micSelect  = document.getElementById('micSelect');
 const recordBtn  = document.getElementById('recordBtn');
 const playBtn    = document.getElementById('playBtn');
+const exportBtn  = document.getElementById('exportBtn');
 const rateSlider = document.getElementById('rateSlider');
 const rateLabel  = document.getElementById('rateLabel');
 const status     = document.getElementById('status');
@@ -109,6 +111,7 @@ recordBtn.addEventListener('click', async () => {
       const arrayBuffer = await blob.arrayBuffer();
       recordedBuffer = await audioCtx.decodeAudioData(arrayBuffer);
       playBtn.disabled = false;
+      exportBtn.disabled = false;
       status.textContent = 'Recording ready. Adjust the slider and hit Play.';
       stream.getTracks().forEach(t => t.stop());
     };
@@ -134,6 +137,55 @@ playBtn.addEventListener('click', () => {
   status.textContent = `Playing at simulated ${targetRate} Hz`;
 });
 
+exportBtn.addEventListener('click', () => {
+  if (!recordedBuffer) return;
+  const targetRate = parseInt(rateSlider.value, 10);
+  const quantized = quantizeSampleRate(recordedBuffer, targetRate);
+  const blob = encodeMP3(quantized);
+
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `quantized-${targetRate}hz-128kbps.mp3`;
+  a.click();
+  URL.revokeObjectURL(url);
+  status.textContent = `Exported MP3 at simulated ${targetRate} Hz, 128 kbps CBR.`;
+});
+
+// Encodes an AudioBuffer to a 128 kbps CBR MP3 Blob using lamejs.
+function encodeMP3(buffer) {
+  const channels = buffer.numberOfChannels;
+  const sampleRate = buffer.sampleRate;
+  const encoder = new lamejs.Mp3Encoder(channels, sampleRate, 128);
+  const blockSize = 1152; // samples per MP3 frame
+  const mp3Chunks = [];
+
+  const left = floatTo16BitPCM(buffer.getChannelData(0));
+  const right = channels > 1 ? floatTo16BitPCM(buffer.getChannelData(1)) : null;
+
+  for (let i = 0; i < left.length; i += blockSize) {
+    const leftChunk = left.subarray(i, i + blockSize);
+    const rightChunk = right ? right.subarray(i, i + blockSize) : undefined;
+    const mp3buf = right
+      ? encoder.encodeBuffer(leftChunk, rightChunk)
+      : encoder.encodeBuffer(leftChunk);
+    if (mp3buf.length > 0) mp3Chunks.push(mp3buf);
+  }
+  const final = encoder.flush();
+  if (final.length > 0) mp3Chunks.push(final);
+
+  return new Blob(mp3Chunks, { type: 'audio/mp3' });
+}
+
+function floatTo16BitPCM(float32Array) {
+  const out = new Int16Array(float32Array.length);
+  for (let i = 0; i < float32Array.length; i++) {
+    const s = Math.max(-1, Math.min(1, float32Array[i]));
+    out[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  }
+  return out;
+}
+
 // Sample-and-hold decimation: holds each sample for N frames instead of
 // updating every frame, simulating a lower sample rate while keeping
 // playback at the original rate (so pitch/timing stay correct).
@@ -152,6 +204,7 @@ function quantizeSampleRate(buffer, targetRate) {
     }
   }
   return out;
+  // shoutout claude
 }
 </script>
 </body>
