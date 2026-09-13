@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Sample Rate Demo</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --text: #1a1a1a;
+    --line: #d8d8d8;
+    --accent: #2a5adf;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    max-width: 420px;
+    margin: 64px auto;
+    padding: 0 20px;
+    line-height: 1.5;
+  }
+  h1 { font-size: 19px; font-weight: 600; margin-bottom: 24px; }
+  .field { margin-bottom: 22px; }
+  label { display: block; font-size: 13px; color: #555; margin-bottom: 6px; }
+  select, button {
+    font-size: 14px;
+    padding: 8px 12px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: #fff;
+    color: var(--text);
+  }
+  select { width: 100%; }
+  button {
+    cursor: pointer;
+    margin-right: 8px;
+  }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  input[type=range] { width: 100%; margin-top: 4px; }
+  .rate-value { font-variant-numeric: tabular-nums; }
+  #status { font-size: 13px; color: #777; margin-top: 28px; }
+</style>
+</head>
+<body>
+
+<h1>Sample Rate Quantization Demo</h1>
+
+<div class="field">
+  <label for="micSelect">Microphone</label>
+  <select id="micSelect"></select>
+</div>
+
+<div class="field">
+  <button id="recordBtn">Record</button>
+  <button id="playBtn" disabled>Play</button>
+</div>
+
+<div class="field">
+  <label for="rateSlider">Sample rate: <span class="rate-value" id="rateLabel">44100</span> Hz</label>
+  <input type="range" id="rateSlider" min="500" max="44100" value="44100" step="100">
+</div>
+
+<p id="status">Select a microphone and click Record.</p>
+
+<script>
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+let mediaRecorder, chunks = [], recordedBuffer = null, stream = null;
+
+const micSelect  = document.getElementById('micSelect');
+const recordBtn  = document.getElementById('recordBtn');
+const playBtn    = document.getElementById('playBtn');
+const rateSlider = document.getElementById('rateSlider');
+const rateLabel  = document.getElementById('rateLabel');
+const status     = document.getElementById('status');
+
+rateSlider.addEventListener('input', () => rateLabel.textContent = rateSlider.value);
+
+// Populate the microphone list (labels only appear after permission is granted)
+async function listMics() {
+  try {
+    const temp = await navigator.mediaDevices.getUserMedia({ audio: true });
+    temp.getTracks().forEach(t => t.stop());
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    micSelect.innerHTML = '';
+    devices.filter(d => d.kind === 'audioinput').forEach((d, i) => {
+      const opt = document.createElement('option');
+      opt.value = d.deviceId;
+      opt.textContent = d.label || `Microphone ${i + 1}`;
+      micSelect.appendChild(opt);
+    });
+  } catch (err) {
+    status.textContent = 'Microphone permission denied.';
+  }
+}
+listMics();
+
+recordBtn.addEventListener('click', async () => {
+  if (!recordBtn.classList.contains('active')) {
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: { deviceId: micSelect.value ? { exact: micSelect.value } : undefined }
+    });
+    chunks = [];
+    mediaRecorder = new MediaRecorder(stream);
+    mediaRecorder.ondataavailable = e => chunks.push(e.data);
+    mediaRecorder.onstop = async () => {
+      const blob = new Blob(chunks, { type: 'audio/webm' });
+      const arrayBuffer = await blob.arrayBuffer();
+      recordedBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+      playBtn.disabled = false;
+      status.textContent = 'Recording ready. Adjust the slider and hit Play.';
+      stream.getTracks().forEach(t => t.stop());
+    };
+    mediaRecorder.start();
+    recordBtn.textContent = 'Stop';
+    recordBtn.classList.add('active');
+    status.textContent = 'Recording…';
+  } else {
+    mediaRecorder.stop();
+    recordBtn.textContent = 'Record';
+    recordBtn.classList.remove('active');
+  }
+});
+
+playBtn.addEventListener('click', () => {
+  if (!recordedBuffer) return;
+  const targetRate = parseInt(rateSlider.value, 10);
+  const quantized = quantizeSampleRate(recordedBuffer, targetRate);
+  const source = audioCtx.createBufferSource();
+  source.buffer = quantized;
+  source.connect(audioCtx.destination);
+  source.start();
+  status.textContent = `Playing at simulated ${targetRate} Hz`;
+});
+
+// Sample-and-hold decimation: holds each sample for N frames instead of
+// updating every frame, simulating a lower sample rate while keeping
+// playback at the original rate (so pitch/timing stay correct).
+function quantizeSampleRate(buffer, targetRate) {
+  const originalRate = buffer.sampleRate;
+  const ratio = Math.max(1, Math.round(originalRate / targetRate));
+  const out = audioCtx.createBuffer(buffer.numberOfChannels, buffer.length, originalRate);
+
+  for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
+    const input = buffer.getChannelData(ch);
+    const output = out.getChannelData(ch);
+    let held = 0;
+    for (let i = 0; i < input.length; i++) {
+      if (i % ratio === 0) held = input[i];
+      output[i] = held;
+    }
+  }
+  return out;
+}
+</script>
+</body>
+</html>
