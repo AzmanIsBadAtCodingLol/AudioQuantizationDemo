@@ -1,2 +1,2 @@
 # AudioQuantizationDemo
-Simple audio input quantization demo
+Simple audio input quantization demo used for classroom demo 
